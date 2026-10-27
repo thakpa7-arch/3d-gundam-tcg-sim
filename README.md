@@ -6,7 +6,17 @@ browser to play — no install or build needed.
 
 ## Camera
 
-Tabletop, Top-down and Cinematic views — press **V** or the 🎥 button to cycle.
+Tabletop, Top-down and Cinematic views — press **V** or the 🎥 button to cycle. Phones, tablets and small or
+portrait screens start in Top-down (the tilted views shrink the far mat too much to read there); the choice is
+remembered once you change it.
+
+## Performance
+
+The board is real DOM, so its cards and text are always sharp; only the space scene behind it is WebGL. That
+scene is drawn on demand: every frame while the camera moves, shakes or sparks fly, otherwise only the slow
+ambient motion (60 fps on desktop, 20 fps on touch devices, none with reduced motion). Touch devices also get no
+MSAA, a pixel ratio capped at 1.25, coarser spheres, fewer rocks and smaller Earth textures, which are built in
+short slices so loading never stalls. If full-rate frames still run slow, the WebGL pixel ratio steps down to 0.75.
 
 ## Files
 

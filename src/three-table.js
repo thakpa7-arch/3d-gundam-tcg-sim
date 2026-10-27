@@ -8,7 +8,17 @@ import { CSS3DRenderer, CSS3DObject } from 'three/addons/renderers/CSS3DRenderer
 
 const $ = id => document.getElementById(id);
 const D2R = Math.PI / 180;
-const reduced = () => { try { return matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; } };
+const mq = q => { try { return matchMedia(q); } catch (e) { return null; } };
+const mqReduced = mq('(prefers-reduced-motion: reduce)');
+const reduced = () => !!(mqReduced && mqReduced.matches);
+// Phones and tablets get a lighter scene: no MSAA, a lower pixel ratio, coarser spheres, fewer rocks, smaller
+// Earth textures, and the ambient motion (Earth, suits, lights) redrawn at AMBIENT_FPS instead of every frame.
+const LOW = (() => {
+  const coarse = mq('(pointer: coarse)');
+  return !!(coarse && coarse.matches) || Math.min(screen.width || 9999, screen.height || 9999) < 700 || (navigator.deviceMemory || 8) <= 4;
+})();
+const AMBIENT_FPS = LOW ? 20 : 60;
+const PR_MAX = Math.min(devicePixelRatio || 1, LOW ? 1.25 : 1.5), PR_MIN = .75;
 const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
 const gameReady = () => { try { return !!(G && G.player && G.enemy); } catch (e) { return false; } };
@@ -19,9 +29,10 @@ const rows = app ? [...app.querySelectorAll(':scope > .row')] : [];
 if (!slot || rows.length < 2) throw new Error('3D table: board rows not found');
 
 // ---------- renderers (if WebGL is unavailable this throws and the 2D table stays) ----------
-const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+const renderer = new THREE.WebGLRenderer({ antialias: !LOW, powerPreference: 'high-performance' });
 const fxRenderer = new THREE.WebGLRenderer({ alpha: true, antialias: false });
-for (const r of [renderer, fxRenderer]) { r.setPixelRatio(Math.min(devicePixelRatio || 1, 1.5)); r.outputColorSpace = THREE.SRGBColorSpace; }
+let pixelRatio = PR_MAX;
+for (const r of [renderer, fxRenderer]) { r.setPixelRatio(pixelRatio); r.outputColorSpace = THREE.SRGBColorSpace; }
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
 fxRenderer.setClearColor(0x000000, 0);
 $('scene3d').appendChild(renderer.domElement);
@@ -45,7 +56,8 @@ const boardObj = new CSS3DObject(board);
 boardObj.rotation.x = -Math.PI / 2;
 cssScene.add(boardObj);
 let BW = 0, BH = 0;
-const RIM = 46;   // deck margin visible around the mats
+let RIM = 46;     // deck margin visible around the mats (narrower on phones, set in sizeBoard)
+let dirty = true; // the static scene needs a redraw (resize, new textures)
 
 // ---------- shared helpers ----------
 const BOX = new THREE.BoxGeometry(1, 1, 1);
@@ -77,7 +89,7 @@ const cyanLamp = new THREE.PointLight(0x38bdf8, 1.2, 2600, 0); cyanLamp.position
 
 // ---------- space: stars, sun, Earth ----------
 {
-  const N = 4200, pos = new Float32Array(N * 3), col = new Float32Array(N * 3);
+  const N = LOW ? 2400 : 4200, pos = new Float32Array(N * 3), col = new Float32Array(N * 3);
   for (let i = 0; i < N; i++) {
     const u = Math.random() * 2 - 1, a = Math.random() * Math.PI * 2, r = 110000, s = Math.sqrt(1 - u * u);
     pos.set([Math.cos(a) * s * r, u * r, Math.sin(a) * s * r], i * 3);
@@ -90,20 +102,21 @@ const cyanLamp = new THREE.PointLight(0x38bdf8, 1.2, 2600, 0); cyanLamp.position
   scene.add(new THREE.Points(g, new THREE.PointsMaterial({ size: 1.7, sizeAttenuation: false, vertexColors: true, depthWrite: false })));
   const sunGlow = sprite(TEX_GOLD, 26000, 0xffe2a8); sunGlow.position.copy(SUN_DIR).multiplyScalar(100000); scene.add(sunGlow);
 }
-const EARTH_R = 20000;
+const EARTH_R = 20000, SEG = LOW ? [48, 32] : [96, 64];
 const earth = new THREE.Group(); earth.position.set(0, -EARTH_R - 3600, 1500); scene.add(earth);
 const earthMat = std(0x1d4f7a, { metalness: 0, roughness: .85 });
-const earthMesh = new THREE.Mesh(new THREE.SphereGeometry(EARTH_R, 96, 64), earthMat); earth.add(earthMesh);
+const earthMesh = new THREE.Mesh(new THREE.SphereGeometry(EARTH_R, ...SEG), earthMat); earth.add(earthMesh);
 const cloudMat = new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0, roughness: 1, metalness: 0, depthWrite: false });
-const clouds = new THREE.Mesh(new THREE.SphereGeometry(EARTH_R * 1.008, 96, 64), cloudMat); earth.add(clouds);
-earth.add(new THREE.Mesh(new THREE.SphereGeometry(EARTH_R * 1.045, 96, 64), new THREE.ShaderMaterial({
+const clouds = new THREE.Mesh(new THREE.SphereGeometry(EARTH_R * 1.008, ...SEG), cloudMat); earth.add(clouds);
+earth.add(new THREE.Mesh(new THREE.SphereGeometry(EARTH_R * 1.045, ...SEG), new THREE.ShaderMaterial({
   side: THREE.BackSide, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
   uniforms: { sunDir: { value: SUN_DIR } },
   vertexShader: `varying vec3 vN; varying vec3 vW; void main(){ vN=normalize(mat3(modelMatrix)*normal); vec4 w=modelMatrix*vec4(position,1.); vW=w.xyz; gl_Position=projectionMatrix*viewMatrix*w; }`,
   fragmentShader: `uniform vec3 sunDir; varying vec3 vN; varying vec3 vW; void main(){ vec3 v=normalize(cameraPosition-vW); float rim=pow(clamp(1.0+dot(v,vN)*1.0,0.,1.),2.2); float lit=.35+.65*clamp(dot(-vN,-sunDir)*.5+.6,0.,1.); gl_FragColor=vec4(vec3(.32,.62,1.)*rim*lit*1.6, rim); }`,
 })));
 
-// Procedural Earth: 3D value noise sampled on the sphere (no seams), built after the first frames.
+// Procedural Earth: 3D value noise sampled on the sphere (no seams), built in short slices after the first
+// frames so it never blocks a tap (it was a 1.5 s stall on a throttled phone).
 function makeNoise(seed) {
   let s = seed; const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
   const perm = [...Array(256).keys()];
@@ -119,11 +132,11 @@ function makeNoise(seed) {
   };
   return (x, y, z, oct) => { let a = 1, fr = 1, sum = 0, norm = 0; for (let o = 0; o < oct; o++) { sum += a * n(x * fr, y * fr, z * fr); norm += a; a *= .5; fr *= 2.03; } return sum / norm; };
 }
-function buildEarthTextures() {
+function* buildEarthTextures() {
   const land = makeNoise(1977), sky = makeNoise(79);
-  const W = 1024, H = 512, c = document.createElement('canvas'); c.width = W; c.height = H;
+  const W = LOW ? 512 : 1024, H = W / 2, c = document.createElement('canvas'); c.width = W; c.height = H;
   const g = c.getContext('2d'), img = g.createImageData(W, H), d = img.data;
-  const cW = 512, cH = 256, cc = document.createElement('canvas'); cc.width = cW; cc.height = cH;
+  const cW = W / 2, cH = W / 4, cc = document.createElement('canvas'); cc.width = cW; cc.height = cH;
   const cg = cc.getContext('2d'), cimg = cg.createImageData(cW, cH), cd = cimg.data;
   const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
   for (let j = 0; j < H; j++) {
@@ -138,6 +151,7 @@ function buildEarthTextures() {
       if (ice) rgb = mix(rgb, [228, 236, 244], ice);
       const k = (j * W + i) * 4; d[k] = rgb[0]; d[k + 1] = rgb[1]; d[k + 2] = rgb[2]; d[k + 3] = 255;
     }
+    yield;
   }
   g.putImageData(img, 0, 0);
   for (let j = 0; j < cH; j++) {
@@ -148,12 +162,23 @@ function buildEarthTextures() {
       const a = Math.max(0, Math.min(1, (n - .5) / .22));
       const k = (j * cW + i) * 4; cd[k] = cd[k + 1] = cd[k + 2] = 255; cd[k + 3] = a * 235;
     }
+    yield;
   }
   cg.putImageData(cimg, 0, 0);
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
   earthMat.map = t; earthMat.color.set(0xffffff); earthMat.needsUpdate = true;
   const ct = new THREE.CanvasTexture(cc); ct.colorSpace = THREE.SRGBColorSpace;
   cloudMat.map = ct; cloudMat.opacity = .9; cloudMat.needsUpdate = true;
+  dirty = true;
+}
+// Runs a generator a few milliseconds at a time, yielding to the page in between.
+function runSliced(gen, budget = 6) {
+  const step = () => {
+    const end = performance.now() + budget;
+    try { while (performance.now() < end) if (gen.next().done) return; } catch (e) { return; }
+    setTimeout(step, 0);
+  };
+  step();
 }
 
 // ---------- the station deck under the board ----------
@@ -281,7 +306,7 @@ function placeSuits() {
 const rocks = [];
 {
   const geo = new THREE.IcosahedronGeometry(1, 0), m = std(0x4a4339, { metalness: .2, roughness: .9, flatShading: true });
-  for (let i = 0; i < 46; i++) {
+  for (let i = 0, n = LOW ? 24 : 46; i < n; i++) {
     const r = new THREE.Mesh(geo, m), a = Math.random() * Math.PI * 2, d = 1500 + Math.random() * 3200;
     r.position.set(Math.cos(a) * d, -300 - Math.random() * 2200, Math.sin(a) * d * .8);
     r.scale.set(20 + Math.random() * 60, 18 + Math.random() * 50, 20 + Math.random() * 55);
@@ -383,7 +408,10 @@ const VIEWS = [
   { id: 'top', name: 'Top-down', phi: 3, theta: 0 },
   { id: 'cine', name: 'Cinematic', phi: 55, theta: -16 },
 ];
-let viewIdx = Math.max(0, VIEWS.findIndex(v => v.id === lsGet('gtcg3d_view')));
+// Until a view is picked, phones, tablets and small or portrait screens start top-down: tilting the board makes
+// its far mat too small to read there.
+const savedView = VIEWS.findIndex(v => v.id === lsGet('gtcg3d_view'));
+let viewIdx = savedView >= 0 ? savedView : (LOW || innerHeight > innerWidth || innerWidth < 820 || innerHeight < 560) ? 1 : 0;
 const cur = { phi: 34, theta: 0, dist: 2400, ox: 0, oy: 0 }, goal = { ...cur };
 let snapNext = true, settleT = 0;
 const tmpCam = new THREE.PerspectiveCamera(36, 1, 20, 160000), v3 = new THREE.Vector3();
@@ -416,7 +444,7 @@ function computeGoal() {
   const b = projectedBox(v.phi, v.theta, hi, W, H);
   Object.assign(goal, { phi: v.phi, theta: v.theta, dist: hi, ox: (b.x0 + b.x1) / 2 - cx, oy: (b.y0 + b.y1) / 2 - cy });
   if (snapNext || reduced()) { Object.assign(cur, goal); snapNext = false; }
-  settleT = 1.6;
+  settleT = 1.6; dirty = true;
 }
 function toast(text) {
   const t = $('camToast'); if (!t) return;
@@ -443,15 +471,21 @@ window.matAspect = function (side) {
 };
 
 // ---------- sizing ----------
+// The board is laid out the deck's rim smaller than the space it gets, so once the camera frames board + rim the
+// mats show at about their 2D size (top-down) instead of shrunk.
+let sizeKey = '';
 function sizeBoard() {
-  const r = slot.getBoundingClientRect();
-  const w = Math.round(Math.max(300, Math.min(r.width, 1640)));
+  const r = slot.getBoundingClientRect(), rim = LOW || Math.min(innerWidth, innerHeight) < 700 ? 14 : 46;
+  const w = Math.round(Math.max(300, Math.min(r.width - 2 * rim, 1640)));
   board.style.width = w + 'px'; board.style.height = 'auto';
-  const h = Math.round(Math.max(board.offsetHeight, r.height, 280));
+  const h = Math.round(Math.max(board.offsetHeight, r.height - 2 * rim, 280));
   board.style.height = h + 'px';
-  const changed = w !== BW || h !== BH;
-  if (changed) { BW = w; BH = h; layoutDeck(); if (gameReady()) try { fitBattlefields(); } catch (e) {} }
-  const W = innerWidth, H = innerHeight;
+  if (w !== BW || h !== BH || rim !== RIM) { BW = w; BH = h; RIM = rim; layoutDeck(); if (gameReady()) try { fitBattlefields(); } catch (e) {} }
+  // Only touch the renderers when something moved: setSize reallocates the canvases, and the phone poll below
+  // runs every 1.5 s.
+  const W = innerWidth, H = innerHeight, key = [W, H, r.top, r.height, BW, BH].join();
+  if (key === sizeKey) return;
+  sizeKey = key;
   renderer.setSize(W, H, false); fxRenderer.setSize(W, H, false); cssRenderer.setSize(W, H);
   computeGoal();
 }
@@ -462,13 +496,35 @@ new ResizeObserver(queueSize).observe(slot);
 // Phones stack the rows, so the board's natural height follows its content.
 setInterval(() => { if (!document.hidden && (innerWidth <= 820 || innerHeight <= 560)) sizeBoard(); }, 1500);
 
+// If full-rate frames keep running slow, render the WebGL layers at a lower pixel ratio. The board is DOM, so its
+// cards and text stay sharp either way.
+let slowN = 0, sampleN = 0;
+function adaptResolution(ms) {
+  if (pixelRatio <= PR_MIN) return;
+  sampleN++; if (ms > 34) slowN++;
+  if (sampleN < 45) return;
+  if (slowN > 30) {
+    pixelRatio = Math.max(PR_MIN, pixelRatio - .25);
+    for (const r of [renderer, fxRenderer]) r.setPixelRatio(pixelRatio);   // resizes the canvases too
+    dirty = true;
+  }
+  slowN = sampleN = 0;
+}
+
 // ---------- frame loop ----------
-let last = performance.now(), T = 0, arrowT = 0;
+// Draws only when needed: every frame while the camera settles, shakes or sparks fly; otherwise just the slow
+// ambient motion at AMBIENT_FPS, and nothing at all with reduced motion.
+let last = performance.now(), lastDraw = 0, T = 0, arrowT = 0, wasBusy = false;
 function frame(now) {
   requestAnimationFrame(frame);
   if (document.hidden) { last = now; return; }
-  const dt = Math.min(.05, (now - last) / 1000); last = now; T += dt;
-  const calm = reduced(), k = 1 - Math.exp(-dt * 4.5);
+  const ms = now - last, dt = Math.min(.05, ms / 1000); last = now; T += dt;
+  const calm = reduced(), busy = dirty || settleT > 0 || shake.t > 0 || fxAlive > -1;
+  if (busy && wasBusy) adaptResolution(ms);
+  wasBusy = busy;
+  if (!busy && (calm || now - lastDraw < 1000 / AMBIENT_FPS - 2)) return;
+  lastDraw = now;
+  const k = 1 - Math.exp(-dt * 4.5);
   for (const key in goal) cur[key] += (goal[key] - cur[key]) * k;
   // The board never moves on its own (no sway, no parallax), so a card stays where the pointer is aiming.
   place(camera, cur.phi, cur.theta, cur.dist);
@@ -477,11 +533,16 @@ function frame(now) {
   camera.aspect = innerWidth / innerHeight;
   camera.setViewOffset(innerWidth, innerHeight, cur.ox + sx, cur.oy + sy, innerWidth, innerHeight);
   // The attack arrow is drawn in screen space from card rects: keep it on its cards while the camera moves.
-  if (settleT > 0) { settleT -= dt; arrowT -= dt; if (arrowT <= 0) { arrowT = .1; try { drawBattleArrow(); } catch (e) {} } }
+  if (settleT > 0) {
+    settleT -= dt; arrowT -= dt;
+    if (arrowT <= 0 || settleT <= 0) { arrowT = .1; try { drawBattleArrow(); } catch (e) {} }
+    if (settleT <= 0) Object.assign(cur, goal);
+  }
 
   if (!calm) {
-    earth.rotation.y += dt * .004; clouds.rotation.y += dt * .002;
-    rocks.forEach(r => { r.rotation.x += r.userData.spin.x * dt; r.rotation.y += r.userData.spin.y * dt; });
+    // Absolute in T, so skipped frames don't slow anything down.
+    earth.rotation.y = T * .004; clouds.rotation.y = T * .002;
+    rocks.forEach(r => { r.rotation.x = r.userData.spin.x * T; r.rotation.y = r.userData.spin.y * T; });
     suits.forEach((s, i) => {
       s.position.y = s.userData.baseY + Math.sin(T * .6 + i * 2) * 22;
       s.userData.flames.forEach(f => f.scale.setScalar(1.3 + Math.random() * .7));
@@ -491,7 +552,8 @@ function frame(now) {
     trimMat.color.setRGB(.83 + Math.sin(T * 1.2) * .08, .63, .09);
   }
   renderer.render(scene, camera);
-  cssRenderer.render(cssScene, camera);
+  if (busy) cssRenderer.render(cssScene, camera);
+  dirty = false;
   if (updateFx(dt) || fxAlive > -1) { fxRenderer.render(fxScene, camera); if (fxAlive <= 0) fxAlive = -2; }
 }
 
@@ -499,4 +561,4 @@ function frame(now) {
 document.documentElement.classList.add('is3d');
 sizeBoard();
 requestAnimationFrame(frame);
-setTimeout(() => { try { buildEarthTextures(); } catch (e) {} }, 400);
+setTimeout(() => runSliced(buildEarthTextures()), 400);
