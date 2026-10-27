@@ -1,3 +1,60 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style><style>
+  /* ==== 3D table ====
+     Layering, bottom to top: #scene3d (WebGL: orbit, Earth, station deck, mobile suits)
+     → #board3dLayer (CSS3D: both playmats lying on the deck, still real DOM, so every click,
+     hover and effect of the 2D game works) → #fx3d (WebGL sparks over the board, no pointer events)
+     → #app (screen-space HUD: header, hand, controls) → the game's own dialogs.
+     Everything is keyed on html.is3d, which the module sets once Three.js has loaded, so the page
+     falls back to the plain 2D table if the library cannot load. */
+  #scene3d, #board3dLayer, #fx3d { position: fixed; inset: 0; display: none; }
+  #scene3d { z-index: 0; background: #020309; }
+  /* clip, not hidden: a hidden box can still be scrolled by focus or scrollIntoView, which would slide
+     the mats off their deck. */
+  #board3dLayer, #board3dLayer > div { overflow: clip !important; }
+  #board3dLayer { z-index: 1; pointer-events: none; }
+  #fx3d { z-index: 1; pointer-events: none; }
+  #scene3d canvas, #fx3d canvas { display: block; width: 100%; height: 100%; }
+  .board-slot, #camBtn, #camToast { display: none; }
+
+  html.is3d #scene3d, html.is3d #board3dLayer, html.is3d #fx3d { display: block; }
+  html.is3d body::before { display: none; }
+  html.is3d, html.is3d body { height: 100%; min-height: 0; overflow: hidden; }
+  html.is3d #app { height: 100vh; height: 100dvh; min-height: 0; overflow: visible; pointer-events: none; }
+  html.is3d #app > * { pointer-events: auto; }
+  html.is3d #app > .board-slot { display: block; flex: 1; min-height: 0; pointer-events: none; }
+  html.is3d header { text-shadow: 0 1px 4px rgba(0,0,0,.9); border-bottom-color: rgba(212,160,23,.28); }
+  html.is3d #camBtn { display: inline-flex; align-items: center; gap: 6px; }
+
+  /* The board: both rows (side panel + mat) exactly as in 2D, sized by the module to the space the
+     2D table had, then laid flat on the deck. */
+  #board3d { position: absolute; display: flex; flex-direction: column; gap: 10px; padding: 12px;
+    border-radius: 18px; pointer-events: auto; box-sizing: border-box; }
+  #board3d > .row { flex: 1; min-height: 0; }
+
+  /* Cards stand slightly proud of the mat and rise towards the camera on hover. `translate` is its own
+     property, so it stacks on top of the game's transform animations (rest, lunge, hit, destroy). */
+  html.is3d #board3d, html.is3d #board3d > .row, html.is3d #board3d .mat, html.is3d #board3d .mat-mid,
+  html.is3d #board3d .battlefield { transform-style: preserve-3d; }
+  html.is3d #board3d .battlefield { overflow: visible; }
+  html.is3d #board3d .battlefield .card { translate: 0 0 3px; transition: transform .12s, box-shadow .12s, translate .2s ease; }
+  html.is3d #board3d .battlefield .card:hover { translate: 0 0 26px; box-shadow: 0 18px 30px rgba(0,0,0,.65); }
+  html.is3d #board3d .battlefield .card.fx-enter { animation-name: cardEnter, drop3d; animation-duration: .5s, .5s; }
+  html.is3d #board3d .battlefield .card.rested.fx-enter { animation-name: cardEnterRested, drop3d; }
+  @keyframes drop3d { 0% { translate: 0 0 220px; } 70% { translate: 0 0 0; } 100% { translate: 0 0 3px; } }
+
+  #camToast { position: fixed; left: 50%; top: max(56px, calc(env(safe-area-inset-top, 0px) + 48px)); transform: translateX(-50%);
+    z-index: 70; padding: 6px 16px; border-radius: 16px; border: 1px solid rgba(212,160,23,.6);
+    background: rgba(10,8,4,.82); color: #f5d27a; font-size: 12px; font-weight: 700; letter-spacing: 2px;
+    text-transform: uppercase; pointer-events: none; opacity: 0; transition: opacity .25s; }
+  html.is3d #camToast { display: block; }
+  #camToast.show { opacity: 1; }
+
+  @media (prefers-reduced-motion: reduce) {
+    html.is3d #board3d .battlefield .card { transition: none; }
+    html.is3d #board3d .battlefield .card.fx-enter { animation-name: none; }
+  }
+</style>
+</head><body>
 <title>3D Gundam TCG Sim</title>
 <!-- Installable web app (iPhone "Add to Home Screen" → offline play). Card art is remote, but the
      game shell is cached by the service worker; offline, cards fall back to text faces. -->
@@ -996,62 +1053,6 @@
     #blockModal #blockMsg { font-size: 15.5px; }
     #setupModal > div:has(#dbLayout) { max-width: min(1440px, 92vw) !important; }
     #dbGrid, #dbSide { max-height: 62vh !important; }
-  }
-</style>
-<style>
-  /* ==== 3D table ====
-     Layering, bottom to top: #scene3d (WebGL: orbit, Earth, station deck, mobile suits)
-     → #board3dLayer (CSS3D: both playmats lying on the deck, still real DOM, so every click,
-     hover and effect of the 2D game works) → #fx3d (WebGL sparks over the board, no pointer events)
-     → #app (screen-space HUD: header, hand, controls) → the game's own dialogs.
-     Everything is keyed on html.is3d, which the module sets once Three.js has loaded, so the page
-     falls back to the plain 2D table if the library cannot load. */
-  #scene3d, #board3dLayer, #fx3d { position: fixed; inset: 0; display: none; }
-  #scene3d { z-index: 0; background: #020309; }
-  /* clip, not hidden: a hidden box can still be scrolled by focus or scrollIntoView, which would slide
-     the mats off their deck. */
-  #board3dLayer, #board3dLayer > div { overflow: clip !important; }
-  #board3dLayer { z-index: 1; pointer-events: none; }
-  #fx3d { z-index: 1; pointer-events: none; }
-  #scene3d canvas, #fx3d canvas { display: block; width: 100%; height: 100%; }
-  .board-slot, #camBtn, #camToast { display: none; }
-
-  html.is3d #scene3d, html.is3d #board3dLayer, html.is3d #fx3d { display: block; }
-  html.is3d body::before { display: none; }
-  html.is3d, html.is3d body { height: 100%; min-height: 0; overflow: hidden; }
-  html.is3d #app { height: 100vh; height: 100dvh; min-height: 0; overflow: visible; pointer-events: none; }
-  html.is3d #app > * { pointer-events: auto; }
-  html.is3d #app > .board-slot { display: block; flex: 1; min-height: 0; pointer-events: none; }
-  html.is3d header { text-shadow: 0 1px 4px rgba(0,0,0,.9); border-bottom-color: rgba(212,160,23,.28); }
-  html.is3d #camBtn { display: inline-flex; align-items: center; gap: 6px; }
-
-  /* The board: both rows (side panel + mat) exactly as in 2D, sized by the module to the space the
-     2D table had, then laid flat on the deck. */
-  #board3d { position: absolute; display: flex; flex-direction: column; gap: 10px; padding: 12px;
-    border-radius: 18px; pointer-events: auto; box-sizing: border-box; }
-  #board3d > .row { flex: 1; min-height: 0; }
-
-  /* Cards stand slightly proud of the mat and rise towards the camera on hover. `translate` is its own
-     property, so it stacks on top of the game's transform animations (rest, lunge, hit, destroy). */
-  html.is3d #board3d, html.is3d #board3d > .row, html.is3d #board3d .mat, html.is3d #board3d .mat-mid,
-  html.is3d #board3d .battlefield { transform-style: preserve-3d; }
-  html.is3d #board3d .battlefield { overflow: visible; }
-  html.is3d #board3d .battlefield .card { translate: 0 0 3px; transition: transform .12s, box-shadow .12s, translate .2s ease; }
-  html.is3d #board3d .battlefield .card:hover { translate: 0 0 26px; box-shadow: 0 18px 30px rgba(0,0,0,.65); }
-  html.is3d #board3d .battlefield .card.fx-enter { animation-name: cardEnter, drop3d; animation-duration: .5s, .5s; }
-  html.is3d #board3d .battlefield .card.rested.fx-enter { animation-name: cardEnterRested, drop3d; }
-  @keyframes drop3d { 0% { translate: 0 0 220px; } 70% { translate: 0 0 0; } 100% { translate: 0 0 3px; } }
-
-  #camToast { position: fixed; left: 50%; top: max(56px, calc(env(safe-area-inset-top, 0px) + 48px)); transform: translateX(-50%);
-    z-index: 70; padding: 6px 16px; border-radius: 16px; border: 1px solid rgba(212,160,23,.6);
-    background: rgba(10,8,4,.82); color: #f5d27a; font-size: 12px; font-weight: 700; letter-spacing: 2px;
-    text-transform: uppercase; pointer-events: none; opacity: 0; transition: opacity .25s; }
-  html.is3d #camToast { display: block; }
-  #camToast.show { opacity: 1; }
-
-  @media (prefers-reduced-motion: reduce) {
-    html.is3d #board3d .battlefield .card { transition: none; }
-    html.is3d #board3d .battlefield .card.fx-enter { animation-name: none; }
   }
 </style>
 </head>

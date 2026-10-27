@@ -14,8 +14,8 @@ function swap(from, to) {
   html = html.replace(from, () => to);
 }
 
-// The published page gets its own document skeleton, so drop the one saved with the source.
-html = html.slice(html.indexOf('\n') + 1);
+// Line 1 is the standard page skeleton (doctype, viewport, reset). Keep it: GitHub Pages needs it, and
+// the artifact host recognizes and replaces it rather than nesting its own.
 swap('<title>Tha Gundam TCG Sim</title>', '<title>3D Gundam TCG Sim</title>');
 swap('<h1>Tha Gundam TCG Sim</h1>', '<h1>3D Gundam TCG Sim</h1>');
 swap('<h2>THA GUNDAM TCG SIM</h2>', '<h2>3D GUNDAM TCG SIM</h2>');
