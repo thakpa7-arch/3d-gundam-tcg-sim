@@ -317,11 +317,13 @@ const rocks = [];
 
 // ---------- spark particles over the board (fx layer) ----------
 const PN = 700;
-const pPos = new Float32Array(PN * 3), pCol = new Float32Array(PN * 3), pVel = new Float32Array(PN * 3);
+// Colour carries alpha too: fading only the colour left each spark's alpha behind, so dead sparks stayed on the
+// board as dark dots.
+const pPos = new Float32Array(PN * 3), pCol = new Float32Array(PN * 4), pVel = new Float32Array(PN * 3);
 const pLife = new Float32Array(PN), pMax = new Float32Array(PN), pBase = new Float32Array(PN * 3);
 const pGeo = new THREE.BufferGeometry();
 pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
-pGeo.setAttribute('color', new THREE.BufferAttribute(pCol, 3));
+pGeo.setAttribute('color', new THREE.BufferAttribute(pCol, 4));
 const sparks = new THREE.Points(pGeo, new THREE.PointsMaterial({ size: 15, map: TEX_WHITE, vertexColors: true, transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending }));
 sparks.frustumCulled = false; fxScene.add(sparks);
 let pNext = 0, fxAlive = 0;
@@ -355,11 +357,11 @@ function updateFx(dt) {
   if (fxAlive <= 0) return false;
   fxAlive -= dt;
   for (let k = 0; k < PN; k++) {
-    if (pLife[k] <= 0) { pCol[k * 3] = pCol[k * 3 + 1] = pCol[k * 3 + 2] = 0; continue; }
+    if (pLife[k] <= 0) { pCol[k * 4 + 3] = 0; continue; }
     pLife[k] -= dt; const i = k * 3, f = Math.max(0, pLife[k] / pMax[k]);
     pVel[i + 1] -= 900 * dt; pVel[i] *= .97; pVel[i + 2] *= .97;
     pPos[i] += pVel[i] * dt; pPos[i + 1] = Math.max(2, pPos[i + 1] + pVel[i + 1] * dt); pPos[i + 2] += pVel[i + 2] * dt;
-    pCol[i] = pBase[i] * f; pCol[i + 1] = pBase[i + 1] * f; pCol[i + 2] = pBase[i + 2] * f;
+    const j = k * 4; pCol[j] = pBase[i]; pCol[j + 1] = pBase[i + 1]; pCol[j + 2] = pBase[i + 2]; pCol[j + 3] = f;
   }
   pGeo.attributes.position.needsUpdate = true; pGeo.attributes.color.needsUpdate = true;
   for (const r of rings) if (r.visible) {
@@ -521,8 +523,10 @@ function frame(now) {
   const ms = now - last, dt = Math.min(.05, ms / 1000); last = now; T += dt;
   const calm = reduced(), busy = dirty || settleT > 0 || shake.t > 0 || fxAlive > -1;
   if (busy && wasBusy) adaptResolution(ms);
+  // One more full frame after the last busy one, so the board catches the camera's resting place (end of a shake).
+  const moving = busy || wasBusy;
   wasBusy = busy;
-  if (!busy && (calm || now - lastDraw < 1000 / AMBIENT_FPS - 2)) return;
+  if (!moving && (calm || now - lastDraw < 1000 / AMBIENT_FPS - 2)) return;
   lastDraw = now;
   const k = 1 - Math.exp(-dt * 4.5);
   for (const key in goal) cur[key] += (goal[key] - cur[key]) * k;
@@ -552,7 +556,7 @@ function frame(now) {
     trimMat.color.setRGB(.83 + Math.sin(T * 1.2) * .08, .63, .09);
   }
   renderer.render(scene, camera);
-  if (busy) cssRenderer.render(cssScene, camera);
+  if (moving) cssRenderer.render(cssScene, camera);
   dirty = false;
   if (updateFx(dt) || fxAlive > -1) { fxRenderer.render(fxScene, camera); if (fxAlive <= 0) fxAlive = -2; }
 }
